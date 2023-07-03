@@ -1,0 +1,124 @@
+#!meta
+
+{"kernelInfo":{"defaultKernelName":"csharp","items":[{"aliases":[],"languageName":"csharp","name":"csharp"}]}}
+
+#!csharp
+
+#r "nuget: Microsoft.SemanticKernel, 0.17.230629.1-preview"
+#r "nuget: Microsoft.SemanticKernel.Connectors.Memory.AzureCognitiveSearch, 0.17.230629.1-preview"
+#r "nuget: Microsoft.SemanticKernel.Core, 0.17.230629.1-preview"
+
+#!csharp
+
+using Microsoft.SemanticKernel;
+using Microsoft.SemanticKernel.Memory;
+using Microsoft.SemanticKernel.Connectors.Memory.AzureCognitiveSearch;
+
+IKernel semanticKernel = Kernel.Builder
+                    .WithOpenAITextCompletionService(
+                        "text-davinci-003",                     // OpenAI Model Name
+                        "<_REPLACE_WITH_OPEN_AI_KEY_>" // OpenAI Key
+                    )
+                    .WithAzureCognitiveSearchMemory("https://<_ACS_INSTANCE_ENDPOINT_>.search.windows.net", "<_REPLACE_WITH_ACS_AI_KEY_>")
+                    .Build();
+
+#!csharp
+
+using Microsoft.SemanticKernel.SemanticFunctions;
+
+string skPrompt = """
+You are chatbot which only summarizes the document. Don't answer from public information.
+Summarize the content {{$documentFromACS}}.
+""";
+
+
+var promptConfig = new PromptTemplateConfig
+{
+    Completion =
+    {
+        MaxTokens = 2000,
+        Temperature = 0.2,
+        TopP = 0.5,
+    }
+};
+
+var promptTemplate = new PromptTemplate(
+    skPrompt,                        
+    promptConfig,                   
+    semanticKernel                          
+);
+
+#!csharp
+
+    var functionConfig = new SemanticFunctionConfig(promptConfig, promptTemplate);
+    var summaryFunction = semanticKernel.RegisterSemanticFunction("MySkill", "Summary", functionConfig);
+
+#!csharp
+
+var summaryFunction = semanticKernel.RegisterSemanticFunction("MySkill", "Summary", functionConfig);
+
+#!markdown
+
+## Chat 
+
+#!csharp
+
+// Create Context for chat. Context stores all relevant data for chat session. 
+var context = semanticKernel.CreateNewContext();
+
+#!csharp
+
+Func<string, Task> Chat = async (string input) => {
+    // save the context variable input
+    context["input"] = input;
+
+    // Get semantic similar data from Azure Cognitive SearchAsync 
+    var memories = semanticKernel.Memory.SearchAsync("internaldoc", input, limit: 1, minRelevanceScore: 0.5);
+    var internalDoc = "";
+    await foreach (MemoryQueryResult memory in memories)
+    {
+        Console.WriteLine("<-- Semantically Similar doc found --> " + memory.Metadata.Id);
+        internalDoc = memory.Metadata.Text;
+    }
+    context["documentFromACS"] = internalDoc;
+
+    // Process the user message and get an answer
+    var answer = await summaryFunction.InvokeAsync(context);
+
+    Console.WriteLine("<-- Document Summarize by GPT --> ");
+
+    // Show the response
+    Console.WriteLine(answer);
+};
+
+#!csharp
+
+await Chat("I want to know company earning");
+
+#!csharp
+
+var sampleFiles = new Dictionary<string, string>()
+{
+    ["company-marketing-stratergy"]
+     = "Sample Marketing Strategy for XYZ Company: Define Target Market: Identify the specific target audience for XYZ Company's products or services. Conduct market research to understand their demographics, preferences, and needs. Set Clear Objectives: Establish measurable marketing objectives aligned with the company's overall goals. For example, increase brand awareness, generate leads, or drive sales. Develop a Unique Value Proposition: Clearly articulate the unique value proposition of XYZ Company's offerings. Highlight the benefits and differentiation that set the company apart from competitors. Multi-Channel Approach: Implement a multi-channel marketing approach to reach the target audience effectively. Utilize a mix of digital marketing (website, social media, email campaigns), traditional advertising (print, radio, TV), and other relevant channels. Content Marketing: Create high-quality and relevant content that resonates with the target audience. Publish blog posts, articles, videos, and infographics that educate, entertain, or solve their problems.",
+    ["q2-earning-report"]
+        = "Earning Report Sample: Company Name: XYZ Corporation Reporting Period: Q2 2023 1. Total Revenue: $10,000,000 2. Cost of Goods Sold: $5,000,000 3. Gross Profit: $5,000,000 4. Operating Expenses: $3,000,000 5. Operating Income: $2,000,000 6. Interest Income: $100,000 7. Interest Expenses: $50,000 8. Net Income Before Taxes: $2,050,000 9. Income Tax Expense: $500,000 10. Net Income: $1,550,000 Note: The above figures are for illustrative purposes only and may not reflect actual financial data.",
+    ["SeriesFunding"]
+        = "Series A, B, and C are start-up funding rounds that generally follow seed funding and angel investing,providing outside investors the opportunity to invest cash in a growing company in exchange for equity or partial ownership. Series A, B, and C funding rounds are each separate fund-raising occurrences.",
+};
+
+#!csharp
+
+Console.WriteLine("Adding some sample files to Azure Cognitive Search Memory.");
+var i = 0;
+foreach (var entry in sampleFiles)
+{
+    await semanticKernel.Memory.SaveReferenceAsync(
+        collection: "internaldoc",
+        description: entry.Value,
+        text: entry.Value,
+        externalId: entry.Key,
+        externalSourceName: "internal"
+    );
+    Console.WriteLine($" {++i} saved");
+}
